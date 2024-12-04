@@ -1,76 +1,89 @@
-# Nuxt Minimal Starter
+**Secure Token Transmission and Refresh in a Nuxt 3 Application**
 
-Look at the [Nuxt documentation](https://nuxt.com/docs/getting-started/introduction) to learn more.
+When interacting between the frontend and backend, it is essential to securely transmit tokens for authorization and refresh them in a timely manner. An expired token must be refreshed, otherwise, the user session must be terminated to protect data.
 
-## Setup
+**Solution**
 
-Make sure to install dependencies:
+I use HTTP request headers for token transmission. Tokens have a limited lifespan, and a dedicated backend endpoint is implemented for their refresh, accepting the current token and refresh code. This allows users to stay logged in without the need for repeated logins.
 
-```bash
-# npm
-npm install
+To separate business logic from authorization logic, I created a composable called **useApiRest**. It automatically adds the token to each request header and handles its refresh when a 401 error occurs.
 
-# pnpm
-pnpm install
+**Using useApiRest**
 
-# yarn
-yarn install
-
-# bun
-bun install
+```javascript
+const data = await useApiRest<ResultType>('/endpoint', { method: 'post', body: { foo: 1 }});
 ```
 
-## Development Server
+**Step-by-Step Workflow of useApiRest**
 
-Start the development server on `http://localhost:3000`:
+1. **Adding Headers**: For each request, **useApiRest** adds the current token to the `x-authorization` header, if it is available in **authStore**.
+2. **Handling 401 Error**: If the server returns a 401 status (invalid token), **useApiRest** checks for the token and refresh code. If they are present, it retries the request to refresh the token.
+3. **Refreshing the Token**: If the refresh is successful, the new token and refresh code are saved in **authStore**, ensuring continuous authorization.
+4. **Logging Out**: If the token refresh fails (e.g., the server returns a 400 or 401 error), the user session is terminated, and authorization data is cleared.
 
-```bash
-# npm
-npm run dev
+**Implementation of useApiRest**
 
-# pnpm
-pnpm dev
+```javascript
+import { FetchError, type FetchOptions } from "ofetch";
+import { useAuthStore } from "~/stores/useAuthStore";
 
-# yarn
-yarn dev
+export const useApiRest = <T>(url: string, fetchOptions: FetchOptions & { method?: 'get' | 'post' } = {}) => {
+  const authStore = useAuthStore();
 
-# bun
-bun run dev
+  const logout = () => {
+    authStore.$reset();
+    console.log('The system has been logged out. Please login again.');
+  };
+
+  return $fetch<T>(url, {
+    baseURL: useRuntimeConfig().public.REST_API_URL,
+    retry: 1,
+    retryStatusCodes: [401],
+    onRequest({ options }) {
+      options.headers = new Headers(authStore.token ? {
+        'x-authorization': authStore.token,
+      } : {})
+    },
+    async onResponseError({ response, options }) {
+      clearError();
+
+      if (response.status === 401 && authStore.token && authStore.tokenRefreshCode) {
+        if (options.retry) {
+          try {
+            const { token, tokenRefreshCode } = await useApiRest<{ token: string, tokenRefreshCode: string }>('/api/auth/refresh', {
+              method: 'post',
+              body: {
+                tokenRefreshCode: authStore.tokenRefreshCode,
+              }
+            });
+
+            authStore.token = token;
+            authStore.tokenRefreshCode = tokenRefreshCode;
+          } catch (e) {
+            if (e instanceof FetchError && e.status && [400, 401].includes(e.status)) {
+              options.retry = false;
+              logout();
+            }
+          }
+        } else {
+          logout();
+        }
+      }
+    },
+    ...fetchOptions,
+  });
+};
 ```
 
-## Production
+**Pros and Cons**
 
-Build the application for production:
+**Pros:**
+- **Ease of Use**: The token is automatically added to each request, simplifying authorization.
+- **Security**: Tokens have a limited lifespan, reducing the risk of compromise.
+- **Separation of Concerns**: **useApiRest** separates authorization logic from business logic, improving code structure.
 
-```bash
-# npm
-npm run build
+**Cons:**
+- **Increased Response Time**: Token refresh requires an additional request, which may slow down response time.
+- **Dependence on Connection Stability**: If the user loses connection, the token refresh may fail, requiring a re-login.
 
-# pnpm
-pnpm build
-
-# yarn
-yarn build
-
-# bun
-bun run build
-```
-
-Locally preview production build:
-
-```bash
-# npm
-npm run preview
-
-# pnpm
-pnpm preview
-
-# yarn
-yarn preview
-
-# bun
-bun run preview
-```
-
-Check out the [deployment documentation](https://nuxt.com/docs/getting-started/deployment) for more information.
-# nuxt3-fetch-composable
+This approach ensures reliable and secure authorization, enhancing the interaction between the frontend and backend, but requires careful error handling and connection recovery.
