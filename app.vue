@@ -10,9 +10,7 @@
 const dataFromApi = ref<string[]>([]);
 
 onMounted(async () => {
-  const { data } = await useApiRest<{ data: string[] }>('/api/auth/refresh', {
-    method: 'get',
-  });
+  const { data } = await useApiRest<{ data: string[] }>('/endpoint');
 
   dataFromApi.value = data || [];
 })
